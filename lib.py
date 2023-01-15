@@ -3,11 +3,15 @@ import base64
 
 import json
 
+# You may also pick one without version check, of course
+from typing_extensions import TypedDict, NotRequired
+
 from django.core.handlers.wsgi import WSGIRequest
 from django.contrib.sessions.backends.cache import SessionStore
 
-from Crypto.Cipher import PKCS1_OAEP
 from Crypto.PublicKey import RSA
+from Crypto.Cipher import AES, PKCS1_OAEP
+from Crypto.Util.Padding import pad, unpad
 
 
 def jsonDumpDefault(target: any):
@@ -56,10 +60,14 @@ class AesBase64Cipher:
         assert len(secretKey) == 16, 'Secret key length must be 16.'
         self.__cipher = AES.new(key=secretKey, mode=AES.MODE_ECB)
 
-    def encrypt(self, dataStr: str) -> str:
+    def encrypt(self, sourceData: str | bytes) -> str:
+        if isinstance(sourceData, str):
+            dataBytes = sourceData.encode()
+        else:
+            dataBytes = sourceData
         return base64.b64encode(
             self.__cipher.encrypt(
-                pad(dataStr.encode(), block_size=16, style='pkcs7')
+                pad(dataBytes, block_size=16, style='pkcs7')
             )
         ).decode()
 
@@ -83,3 +91,10 @@ class JsonRequestType(WSGIRequest):
     remoteIP_group: str
     Nonce: NonceData
     isAjax: bool
+    encryptType: str | None
+
+
+class JsonResponseDict(TypedDict):
+    status: NotRequired[int]
+    message: NotRequired[str]
+    result: NotRequired[any]

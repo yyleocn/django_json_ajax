@@ -5,7 +5,7 @@ from django.utils.deprecation import MiddlewareMixin
 from django.http import HttpResponse, HttpRequest
 from django.http.response import HttpResponseBase
 
-from .lib import (jsonDumps, jsonLoads, RsaBase64Cipher, AesBase64Cipher, JsonRequestType, )
+from .lib import (jsonDumps, jsonLoads, RsaBase64Cipher, AesBase64Cipher, JsonRequestType, JsonResponseDict, )
 from .exception import HttpError
 
 rsaCipher = None
@@ -18,16 +18,16 @@ except:
 class RequestDecryptMiddleware(MiddlewareMixin):
     @staticmethod
     def process_request(request: HttpRequest) -> None | dict:
-        encryptType = request.META.get('HTTP_ENCRYPT')
+        encryptType = request.headers.get('Body-Encrypt')
         if not encryptType:
             return None
         if encryptType == 'RSA':
             try:
                 request.bodyDecrypt = rsaCipher.decrypt(request.body)
+                request.encryptType = 'RSA'
                 return None
             except Exception as error:
                 return {
-                    'result': -1,
                     'status': HttpError.BadRequest,
                     'message': 'RSA解密失败',
                     'error': error,
@@ -35,11 +35,14 @@ class RequestDecryptMiddleware(MiddlewareMixin):
 
         if encryptType == 'AES':
             try:
-                aesCipher = AesBase64Cipher(request.session.get('aesKey'))
-                request.bodyDecrypt = aesCipher.decrypt(request.body)
+                request.bodyDecrypt = AesBase64Cipher(
+                    request.session.get('aesKey')
+                ).decrypt(
+                    request.body
+                )
+                request.encryptType = 'AES'
             except Exception as error:
                 return {
-                    'result': -1,
                     'status': HttpError.BadRequest,
                     'message': 'AES解密失败',
                     'error': error,
@@ -56,7 +59,7 @@ class JsonRequestMiddleware(MiddlewareMixin):
         解析失败就直接返回 BadRequest.
         """
         request.JsonData = None
-        if request.method == 'POST' and request.META.get('CONTENT_TYPE') == 'application/json':
+        if request.method == 'POST' and request.headers.get('Content-Type') == 'application/json':
             if not request.body:
                 return None
             try:
@@ -71,7 +74,6 @@ class JsonRequestMiddleware(MiddlewareMixin):
             except Exception as error:
                 return {
                     'error': error,
-                    'result': -1,
                     'status': HttpError.BadRequest,
                     'message': '无效的JSON请求',
                 }
@@ -79,7 +81,7 @@ class JsonRequestMiddleware(MiddlewareMixin):
 
 class JsonResponseMiddleware(MiddlewareMixin):
     @staticmethod
-    def process_response(request: HttpRequest, response: HttpResponse) -> HttpResponse:
+    def process_response(request: HttpRequest, response: JsonResponseDict | HttpResponseBase) -> HttpResponseBase:
         """
         自动将非 HttpResponse 类型的返回值转换为 HttpResponse.
         """
@@ -87,28 +89,41 @@ class JsonResponseMiddleware(MiddlewareMixin):
             return response  # 如果类型是 HttpResponse 直接返回
 
         responseData = {
-            'result': 0,
             'message': '已完成',
-            'data': None,
+            'result': None,
         }
         status = 200
 
-        if isinstance(response, dict):  # dict 导出 status/result/message
+        if isinstance(response, dict):  # dict 导出 status
             status = response.get('status', 200)
-            if 'result' in response:
-                responseData['result'] = response.pop('result')
             if 'message' in response:
                 responseData['message'] = response.pop('message')
 
-        if isinstance(response, str):  # str 放入 message
+        responseData['result'] = response  # 放入 result
+
+        if isinstance(response, str):  # str 同时更新 message
             responseData['message'] = response
 
-        responseData['data'] = response  # 剩余数据放入 data
+        responseHeader = {}
+        responseContent = None
+
+        encryptType = getattr(request, 'encryptType', None)
+        aesKey = request.session.get('aesKey')
+        if encryptType == 'AES' and aesKey:
+            try:
+                responseContent = AesBase64Cipher(secretKey=aesKey).encrypt(jsonDumps(responseData))
+                responseHeader['encrypt'] = 'AES'
+            except:
+                responseHeader['encrypt'] = 'AES-FAIL'
+
+        if responseContent is None:
+            responseContent = jsonDumps(responseData)
 
         return HttpResponse(
             status=status,
-            content=jsonDumps(responseData),
+            content=responseContent,
             content_type='application/json',
+            headers=responseHeader,
         )
 
 
@@ -120,7 +135,6 @@ class ExceptionProcessMiddleware(MiddlewareMixin):
         """
         if isinstance(exception, HttpError):
             responseData = {
-                'result': -1,
                 'status': exception.status,
                 'message': exception.message,
                 **exception.data,
@@ -134,7 +148,6 @@ class ExceptionProcessMiddleware(MiddlewareMixin):
             status = HttpError.BadRequest
 
         return {
-            'result': -1,
             'status': status,
             'message': str(exception),
             'error': exception.__class__.__name__,
