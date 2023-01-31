@@ -12,12 +12,12 @@ rsaCipher = None
 try:
     rsaCipher = RsaBase64Cipher(privateKey=settings.RSA_PRIVATE_KEY)
 except:
-    warn('Invalid rsa private key, RequestDecryptMiddleware may crash.')
+    warn('RSA 私钥无效, RequestDecryptMiddleware 可能会出错.')
 
 
 class RequestDecryptMiddleware(MiddlewareMixin):
     @staticmethod
-    def process_request(request: HttpRequest) -> None | dict:
+    def process_request(request: JsonRequestType) -> None | dict:
         encryptType = request.headers.get('Body-Encrypt')
         if not encryptType:
             return None
@@ -59,7 +59,8 @@ class JsonRequestMiddleware(MiddlewareMixin):
         解析失败就直接返回 BadRequest.
         """
         request.JsonData = None
-        if request.method == 'POST' and request.headers.get('Content-Type') == 'application/json':
+        if request.method == 'POST' and (request.headers.get('Content-Type') == 'application/json'
+                                         or request.headers.get('Content-Type') == 'text/plain'):
             if not request.body:
                 return None
             try:
@@ -81,6 +82,39 @@ class JsonRequestMiddleware(MiddlewareMixin):
 
 class JsonResponseMiddleware(MiddlewareMixin):
     @staticmethod
+    # def process_response(request: HttpRequest, response: HttpResponse) -> HttpResponse:
+    #     """
+    #     Auto convert the result like dict/list/set to HttpResponse.
+    #     """
+    #     if isinstance(response, HttpResponseBase):
+    #         # if this get a HttpResponse, do not process
+    #         return response
+    #
+    #     responseData = {
+    #         'result': 0,
+    #         'message': '已完成',
+    #         'data': None,
+    #     }
+    #     status = 200
+    #
+    #     if isinstance(response, dict):
+    #         status = response.get('status', 200)
+    #         if 'result' in response:
+    #             responseData['result'] = response.pop('result')
+    #         if 'message' in response:
+    #             responseData['message'] = response.pop('message')
+    #
+    #     if isinstance(response, str):
+    #         responseData['message'] = response
+    #
+    #     responseData['data'] = response
+    #
+    #     return HttpResponse(
+    #         status=status,
+    #         content=jsonDumps(responseData),
+    #         content_type='application/json',
+    #     )
+
     def process_response(request: HttpRequest, response: JsonResponseDict | HttpResponseBase) -> HttpResponseBase:
         """
         自动将非 HttpResponse 类型的返回值转换为 HttpResponse.
